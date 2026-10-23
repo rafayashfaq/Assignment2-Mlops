@@ -14,6 +14,12 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # Load local environment variables from .env if present
 load_dotenv()
 
@@ -40,8 +46,8 @@ def print_cli_summary(report: AuditReport) -> None:
         from rich.console import Console
         from rich.table import Table
 
-        console = Console()
-        console.print(f"\n[bold green]✓ DevOps Repository Audit Complete[/bold green]")
+        console = Console(highlight=False)
+        console.print(f"\n[bold green][OK] DevOps Repository Audit Complete[/bold green]")
         console.print(f"[bold cyan]Repository:[/bold cyan] {report.repository}")
         console.print(f"[bold cyan]Total Violations Detected:[/bold cyan] {len(report.violations)}\n")
 

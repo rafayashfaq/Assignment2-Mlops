@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devops-auditing-agent"
+version = "1.0.0"
+description = "Autonomous AI Agent for DevOps Repository Auditing and Best-Practice Inspection"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Abdul Rafay Ashfaq", email = "ashfaqrafay12@gmail.com"}
+]
+keywords = ["devops", "agent", "auditing", "mlops", "ai", "security", "ci-cd"]
+dependencies = [
+    "groq>=0.11.0",
+    "openai>=1.40.0",
+    "pydantic>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "pyyaml>=6.0.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+devops-agent = "agent:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --strict-markers"

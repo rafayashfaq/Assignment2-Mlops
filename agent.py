@@ -12,16 +12,18 @@ import logging
 import os
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
-
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
-# Load local environment variables from .env if present
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    # Load local environment variables from .env if present
+    load_dotenv()
+except ImportError:
+    pass
 
 from agent_core.cloner import ClonerError, RepoWorkspace
 from agent_core.llm_client import create_llm_client

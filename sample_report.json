@@ -1,0 +1,75 @@
+{
+  "repository": "https://github.com/example/vulnerable-microservice",
+  "violations": [
+    {
+      "rule_id": "SEC-001",
+      "category": "security",
+      "severity": "critical",
+      "file": "src/services/payment.py",
+      "line": 28,
+      "description": "Hardcoded API credential, token, or secret key committed to source code",
+      "evidence": "Hardcoded credential assigned in source code: STRIPE_API_KEY = \"***REDACTED***\"",
+      "recommendation": "Remove hardcoded secrets from git history and load credentials from environment variables or a secrets manager."
+    },
+    {
+      "rule_id": "CI-001",
+      "category": "github_actions_ci",
+      "severity": "high",
+      "file": ".github/workflows/ci.yml",
+      "line": 42,
+      "description": "CI workflow uses continue-on-error to bypass failed validation gates",
+      "evidence": "Workflow '.github/workflows/ci.yml' specifies 'continue-on-error: true', allowing test failures or security defects to pass silently.",
+      "recommendation": "Remove 'continue-on-error: true' from test or critical lint jobs so failures properly block CI pipelines."
+    },
+    {
+      "rule_id": "CI-002",
+      "category": "github_actions_ci",
+      "severity": "critical",
+      "file": ".github/workflows/pr_review.yml",
+      "line": 15,
+      "description": "Potentially dangerous use of pull_request_target with untrusted head checkout",
+      "evidence": "Workflow '.github/workflows/pr_review.yml' triggers on 'pull_request_target', which can allow arbitrary code execution with repository write tokens.",
+      "recommendation": "Use standard 'pull_request' trigger or avoid checking out untrusted PR head commit in pull_request_target."
+    },
+    {
+      "rule_id": "CFG-002",
+      "category": "configuration",
+      "severity": "high",
+      "file": ".env",
+      "line": null,
+      "description": "Committed local configuration or .env file detected in repository: Committed environment secret file (.env)",
+      "evidence": "Tracked artifact path in git index: '.env'",
+      "recommendation": "Add .env and local configuration files to .gitignore and provide a sanitized .env.example instead."
+    },
+    {
+      "rule_id": "DEP-002",
+      "category": "dependency_management",
+      "severity": "low",
+      "file": "requirements.txt",
+      "line": 4,
+      "description": "Unconstrained or wildcard dependency version specifications detected",
+      "evidence": "Unpinned dependency line: 'requests*'",
+      "recommendation": "Pin dependencies to specific or bounded versions (e.g. ~=, ==, >=x,<y) to avoid breaking changes from upstream releases."
+    },
+    {
+      "rule_id": "CQ-001",
+      "category": "code_quality",
+      "severity": "low",
+      "file": null,
+      "line": null,
+      "description": "Missing automated linter or code formatting configuration",
+      "evidence": "No linting or formatting configuration (ruff.toml, .flake8, pyproject.toml [tool.ruff], eslint) found.",
+      "recommendation": "Configure an automated linter/formatter (such as Ruff, Flake8, Black, or ESLint) to ensure consistent code quality."
+    },
+    {
+      "rule_id": "TST-003",
+      "category": "testing",
+      "severity": "high",
+      "file": ".github/workflows/ci.yml",
+      "line": null,
+      "description": "CI workflow exists but does not execute automated tests",
+      "evidence": "Repository contains tests, but CI workflow '.github/workflows/ci.yml' has no test execution step (steps found: ['checkout', 'setup-python', 'build']).",
+      "recommendation": "Include a testing step (e.g. 'pytest' or 'npm test') in CI workflows to validate every push and pull request."
+    }
+  ]
+}

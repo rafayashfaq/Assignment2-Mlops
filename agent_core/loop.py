@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -144,6 +145,8 @@ class DevOpsAgentLoop:
                         },
                     })
                 assistant_msg["tool_calls"] = formatted_calls
+                if hasattr(response, "raw_parts") and response.raw_parts:
+                    assistant_msg["raw_parts"] = response.raw_parts
                 self.messages.append(assistant_msg)
 
                 # 2. Execute Tools and Interpret Results

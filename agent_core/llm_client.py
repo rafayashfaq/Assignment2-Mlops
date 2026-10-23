@@ -30,10 +30,12 @@ class LLMResponse:
         content: Optional[str] = None,
         tool_calls: Optional[List[Dict[str, Any]]] = None,
         raw_response: Any = None,
+        raw_parts: Optional[List[Dict[str, Any]]] = None,
     ):
         self.content = content or ""
         self.tool_calls = tool_calls or []
         self.raw_response = raw_response
+        self.raw_parts = raw_parts or []
 
     @property
     def has_tool_calls(self) -> bool:
@@ -198,12 +200,18 @@ class GeminiFreeClient(BaseLLMClient):
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY", "")
-        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
+        self.model = model or os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
         if not self.api_key:
             raise ValueError(
                 "GEMINI_API_KEY is not set. Get your 100% free Gemini API key at "
                 "https://aistudio.google.com/ and set GEMINI_API_KEY in your .env file."
             )
+        # List of candidate models to fall back through if a specific model is unreachable or deprecated
+        models_order = [self.model, "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-2.5-flash-lite", "gemini-1.5-flash"]
+        self.candidate_models: List[str] = []
+        for m in models_order:
+            if m not in self.candidate_models:
+                self.candidate_models.append(m)
 
     def chat(
         self,
@@ -211,8 +219,6 @@ class GeminiFreeClient(BaseLLMClient):
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.1,
     ) -> LLMResponse:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
-        
         contents = []
         system_instruction = None
 
@@ -223,16 +229,19 @@ class GeminiFreeClient(BaseLLMClient):
             elif role == "user":
                 contents.append({"role": "user", "parts": [{"text": msg.get("content", "")}]})
             elif role == "assistant":
-                parts: List[Dict[str, Any]] = []
-                if msg.get("content"):
-                    parts.append({"text": msg.get("content")})
-                for tc in msg.get("tool_calls", []):
-                    fn = tc.get("function", {})
-                    raw_args = fn.get("arguments", "{}")
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                    parts.append({"functionCall": {"name": fn.get("name"), "args": args}})
-                if parts:
-                    contents.append({"role": "model", "parts": parts})
+                if msg.get("raw_parts"):
+                    contents.append({"role": "model", "parts": msg["raw_parts"]})
+                else:
+                    parts: List[Dict[str, Any]] = []
+                    if msg.get("content"):
+                        parts.append({"text": msg.get("content")})
+                    for tc in msg.get("tool_calls", []):
+                        fn = tc.get("function", {})
+                        raw_args = fn.get("arguments", "{}")
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                        parts.append({"functionCall": {"name": fn.get("name"), "args": args}})
+                    if parts:
+                        contents.append({"role": "model", "parts": parts})
             elif role == "tool":
                 fn_name = msg.get("name", "tool")
                 raw_content = msg.get("content", "")
@@ -241,7 +250,7 @@ class GeminiFreeClient(BaseLLMClient):
                 except Exception:
                     content_obj = {"output": raw_content}
                 contents.append({
-                    "role": "function",
+                    "role": "user",
                     "parts": [{
                         "functionResponse": {
                             "name": fn_name,
@@ -271,56 +280,73 @@ class GeminiFreeClient(BaseLLMClient):
                 })
             body["tools"] = [{"function_declarations": function_declarations}]
 
-        max_retries = 3
-        backoff = 2.0
+        # Try models in candidate order if 404/unreachable occurs
+        last_error = None
+        for candidate_model in self.candidate_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{candidate_model}:generateContent?key={self.api_key}"
+            max_retries = 2
+            backoff = 2.0
 
-        for attempt in range(max_retries):
-            try:
-                resp = requests.post(url, json=body, timeout=45)
-                if resp.status_code == 429:
-                    if attempt < max_retries - 1:
-                        logger.warning(f"Gemini rate limit (429), retrying in {backoff}s...")
+            for attempt in range(max_retries):
+                try:
+                    resp = requests.post(url, json=body, timeout=25)
+                    if resp.status_code == 429:
+                        if attempt < max_retries - 1:
+                            logger.warning(f"Gemini rate limit (429) on {candidate_model}, retrying...")
+                            time.sleep(backoff)
+                            backoff *= 2
+                            continue
+                    if resp.status_code == 404:
+                        # Model unavailable, try next candidate model
+                        logger.warning(f"Gemini model {candidate_model} returned 404, trying next available model...")
+                        break
+
+                    resp.raise_for_status()
+                    data = resp.json()
+
+                    candidates = data.get("candidates", [])
+                    if not candidates:
+                        return LLMResponse(content="")
+
+                    first = candidates[0]
+                    content_obj = first.get("content", {})
+                    parts = content_obj.get("parts", [])
+
+                    tool_calls: List[Dict[str, Any]] = []
+                    text_parts: List[str] = []
+
+                    for idx, p in enumerate(parts):
+                        if "functionCall" in p:
+                            fc = p["functionCall"]
+                            tool_calls.append({
+                                "id": f"gemini_call_{idx + 1}",
+                                "name": fc.get("name"),
+                                "arguments": fc.get("args", {}),
+                            })
+                        elif "text" in p:
+                            text_parts.append(p["text"])
+
+                    # Successfully received response
+                    self.model = candidate_model
+                    return LLMResponse(
+                        content="\n".join(text_parts),
+                        tool_calls=tool_calls,
+                        raw_response=data,
+                        raw_parts=parts,
+                    )
+                except Exception as exc:
+                    last_error = exc
+                    if "404" in str(exc):
+                        break
+                    if attempt < max_retries - 1 and ("429" in str(exc) or "503" in str(exc)):
                         time.sleep(backoff)
                         backoff *= 2
                         continue
-                resp.raise_for_status()
-                data = resp.json()
+                    logger.debug(f"Gemini attempt failed on {candidate_model}: {exc}")
 
-                candidates = data.get("candidates", [])
-                if not candidates:
-                    return LLMResponse(content="")
-
-                first = candidates[0]
-                content_obj = first.get("content", {})
-                parts = content_obj.get("parts", [])
-
-                tool_calls: List[Dict[str, Any]] = []
-                text_parts: List[str] = []
-
-                for idx, p in enumerate(parts):
-                    if "functionCall" in p:
-                        fc = p["functionCall"]
-                        tool_calls.append({
-                            "id": f"gemini_call_{idx + 1}",
-                            "name": fc.get("name"),
-                            "arguments": fc.get("args", {}),
-                        })
-                    elif "text" in p:
-                        text_parts.append(p["text"])
-
-                return LLMResponse(
-                    content="\n".join(text_parts),
-                    tool_calls=tool_calls,
-                    raw_response=data,
-                )
-            except Exception as exc:
-                if attempt < max_retries - 1 and ("429" in str(exc) or "503" in str(exc)):
-                    time.sleep(backoff)
-                    backoff *= 2
-                    continue
-                logger.error(f"Gemini API error on attempt {attempt + 1}: {exc}")
-                if attempt == max_retries - 1:
-                    raise exc
+        if last_error:
+            raise last_error
+        return LLMResponse(content="")
 
 
 class OpenAIClient(BaseLLMClient):

@@ -15,7 +15,7 @@ Developed for **Assignment 2: MLOps & Production AI Engineering**.
 ## 1. Architectural Highlights
 
 - **Pure Python Control Loop**: Strictly compliant with course framework restrictions—**zero** LangChain, LangGraph, n8n, or prebuilt orchestration frameworks. All agent reasoning, tool dispatching, and control flows are implemented natively.
-- **100% Free API Optimization**: Pre-configured for **Groq Cloud** (`llama-3.3-70b-versatile`), offering **14,400 free requests per day** (30 requests/minute) at **$0 cost** with no credit card requirement. Also supports Google Gemini Free Tier, OpenRouter Free models, and an offline deterministic fallback engine.
+- **100% Free Gemini API Integration**: Pre-configured for **Google Gemini Free Tier** (`gemini-1.5-flash` & `gemini-2.0-flash`) via Google AI Studio, offering **1,500 free requests per day**, **15 requests/minute**, and **1,000,000 tokens/minute** at **$0 fee** with no credit card required. Also supports Groq Cloud, OpenRouter Free models, and an offline deterministic fallback engine.
 - **Strict Evidence Rules**:
   - *No False Equivalence Penalties*: Modern alternatives (e.g. `pyproject.toml` instead of `requirements.txt`, `poetry.lock` instead of `package-lock.json`) are respected and not treated as defects.
   - *No Remote Branch Protection Inference*: Never invents or assumes remote GitHub settings from local files.
@@ -102,24 +102,29 @@ The agent inspects target repositories across all 9 areas defined in the specifi
 
 ## 5. Free API Setup Guide
 
-This agent is configured to utilize **100% free APIs** with maximum daily allowances:
+This agent is built to operate with **100% free AI APIs** with zero financial cost:
 
-### Option A: Groq Cloud (Recommended Default — 14,400 Requests/Day)
-1. Visit [Groq Console](https://console.groq.com/keys) and create a free account (no credit card required).
-2. Generate an API Key.
-3. Configure your environment:
+### Option A: Google Gemini Free API (Recommended Default — 100% Free)
+1. Visit [Google AI Studio](https://aistudio.google.com/) and sign in with your Google account.
+2. Click **Get API key** and generate a free API key (no credit card or billing required).
+3. Configure your local `.env`:
    ```bash
    cp .env.example .env
-   # Add your key to .env:
-   # GROQ_API_KEY=gsk_...
+   # Add your free Gemini key to .env:
+   GEMINI_API_KEY=AIzaSy...
    ```
+4. Free tier quotas:
+   - **1,500 requests / day**
+   - **15 requests / minute**
+   - **1,000,000 tokens / minute**
+   - Models: `gemini-1.5-flash` (fast & lightweight) or `gemini-2.0-flash`
 
-### Option B: Google Gemini Free Tier (1,500 Requests/Day)
-1. Obtain a free key from [Google AI Studio](https://aistudio.google.com/).
-2. Add `GEMINI_API_KEY=your_key` to `.env`.
+### Option B: Groq Cloud Free Tier (Alternative — 14,400 Requests/Day)
+1. Obtain an API key from [Groq Console](https://console.groq.com/keys) (no credit card required).
+2. Add `GROQ_API_KEY=gsk_...` to `.env`.
 
 ### Option C: Offline / Mock Mode (Zero Network, Unlimited Runs)
-- Run with the `--offline` flag to execute using the built-in deterministic heuristic engine. No API key or network access required.
+- Run with the `--offline` flag to execute using the built-in deterministic heuristic engine. No API key or internet access required. Ideal for automated CI testing and grading.
 
 ---
 

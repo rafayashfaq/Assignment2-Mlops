@@ -104,13 +104,13 @@ def parse_arguments() -> argparse.Namespace:
         "--provider",
         type=str,
         default=None,
-        help="LLM provider: groq (default free, 14.4k req/day), gemini, openrouter, openai, or offline.",
+        help="LLM provider: gemini (default free, 15 RPM/1.5k RPD via Google AI Studio), groq, openrouter, openai, or offline.",
     )
     parser.add_argument(
         "--model",
         type=str,
         default=None,
-        help="Model name (e.g. llama-3.3-70b-versatile, gemini-1.5-flash, gpt-4o-mini).",
+        help="Model name (e.g. gemini-1.5-flash, gemini-2.0-flash, llama-3.3-70b-versatile, gpt-4o-mini).",
     )
     parser.add_argument(
         "--max-steps",

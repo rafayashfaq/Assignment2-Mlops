@@ -170,10 +170,30 @@ class GroqClient(BaseLLMClient):
                     raise exc
 
 
+def _convert_schema_to_gemini(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively converts standard JSON Schema to Gemini FunctionDeclaration format."""
+    if not isinstance(schema, dict):
+        return schema
+    converted: Dict[str, Any] = {}
+    for k, v in schema.items():
+        if k == "type" and isinstance(v, str):
+            converted[k] = v.upper()
+        elif k == "properties" and isinstance(v, dict):
+            converted[k] = {pk: _convert_schema_to_gemini(pv) for pk, pv in v.items()}
+        elif k == "items" and isinstance(v, dict):
+            converted[k] = _convert_schema_to_gemini(v)
+        else:
+            converted[k] = v
+    return converted
+
+
 class GeminiFreeClient(BaseLLMClient):
     """
     Client for Google Gemini Free Tier via Google AI Studio.
-    Quota: 1,500 requests/day, 15 requests/minute at $0 fee.
+    Provider: Google AI Studio (https://aistudio.google.com/)
+    Pricing: 100% Free ($0.00 / month, No Credit Card Required)
+    Free Limits: 1,500 requests/day, 15 requests/minute, 1,000,000 tokens/minute
+    Default Model: gemini-1.5-flash or gemini-2.0-flash
     """
 
     def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None):
@@ -181,7 +201,8 @@ class GeminiFreeClient(BaseLLMClient):
         self.model = model or os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
         if not self.api_key:
             raise ValueError(
-                "GEMINI_API_KEY is not set. Get a free API key at https://aistudio.google.com/."
+                "GEMINI_API_KEY is not set. Get your 100% free Gemini API key at "
+                "https://aistudio.google.com/ and set GEMINI_API_KEY in your .env file."
             )
 
     def chat(
@@ -190,20 +211,44 @@ class GeminiFreeClient(BaseLLMClient):
         tools: Optional[List[Dict[str, Any]]] = None,
         temperature: float = 0.1,
     ) -> LLMResponse:
-        # Formulate request to Google Gemini REST endpoint
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
-        # Convert OpenAI-style messages to Gemini contents format
+        
         contents = []
         system_instruction = None
 
         for msg in messages:
             role = msg.get("role")
-            text = msg.get("content", "")
             if role == "system":
-                system_instruction = {"parts": [{"text": text}]}
-            elif role in ["user", "assistant"]:
-                gem_role = "user" if role == "user" else "model"
-                contents.append({"role": gem_role, "parts": [{"text": text}]})
+                system_instruction = {"parts": [{"text": msg.get("content", "")}]}
+            elif role == "user":
+                contents.append({"role": "user", "parts": [{"text": msg.get("content", "")}]})
+            elif role == "assistant":
+                parts: List[Dict[str, Any]] = []
+                if msg.get("content"):
+                    parts.append({"text": msg.get("content")})
+                for tc in msg.get("tool_calls", []):
+                    fn = tc.get("function", {})
+                    raw_args = fn.get("arguments", "{}")
+                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    parts.append({"functionCall": {"name": fn.get("name"), "args": args}})
+                if parts:
+                    contents.append({"role": "model", "parts": parts})
+            elif role == "tool":
+                fn_name = msg.get("name", "tool")
+                raw_content = msg.get("content", "")
+                try:
+                    content_obj = json.loads(raw_content) if isinstance(raw_content, str) else raw_content
+                except Exception:
+                    content_obj = {"output": raw_content}
+                contents.append({
+                    "role": "function",
+                    "parts": [{
+                        "functionResponse": {
+                            "name": fn_name,
+                            "response": {"result": content_obj}
+                        }
+                    }]
+                })
 
         body: Dict[str, Any] = {
             "contents": contents,
@@ -212,21 +257,70 @@ class GeminiFreeClient(BaseLLMClient):
         if system_instruction:
             body["systemInstruction"] = system_instruction
 
-        resp = requests.post(url, json=body, timeout=45)
-        resp.raise_for_status()
-        data = resp.json()
+        # Convert tool definitions to Gemini function_declarations format
+        if tools:
+            function_declarations = []
+            for t in tools:
+                fn = t.get("function", {})
+                params = fn.get("parameters", {})
+                converted_params = _convert_schema_to_gemini(params)
+                function_declarations.append({
+                    "name": fn.get("name"),
+                    "description": fn.get("description", ""),
+                    "parameters": converted_params,
+                })
+            body["tools"] = [{"function_declarations": function_declarations}]
 
-        candidates = data.get("candidates", [])
-        if not candidates:
-            return LLMResponse(content="")
+        max_retries = 3
+        backoff = 2.0
 
-        first = candidates[0]
-        content_obj = first.get("content", {})
-        parts = content_obj.get("parts", [])
-        text_out = "".join(p.get("text", "") for p in parts if "text" in p)
+        for attempt in range(max_retries):
+            try:
+                resp = requests.post(url, json=body, timeout=45)
+                if resp.status_code == 429:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Gemini rate limit (429), retrying in {backoff}s...")
+                        time.sleep(backoff)
+                        backoff *= 2
+                        continue
+                resp.raise_for_status()
+                data = resp.json()
 
-        # Gemini tool/json response parsing
-        return LLMResponse(content=text_out, tool_calls=[])
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    return LLMResponse(content="")
+
+                first = candidates[0]
+                content_obj = first.get("content", {})
+                parts = content_obj.get("parts", [])
+
+                tool_calls: List[Dict[str, Any]] = []
+                text_parts: List[str] = []
+
+                for idx, p in enumerate(parts):
+                    if "functionCall" in p:
+                        fc = p["functionCall"]
+                        tool_calls.append({
+                            "id": f"gemini_call_{idx + 1}",
+                            "name": fc.get("name"),
+                            "arguments": fc.get("args", {}),
+                        })
+                    elif "text" in p:
+                        text_parts.append(p["text"])
+
+                return LLMResponse(
+                    content="\n".join(text_parts),
+                    tool_calls=tool_calls,
+                    raw_response=data,
+                )
+            except Exception as exc:
+                if attempt < max_retries - 1 and ("429" in str(exc) or "503" in str(exc)):
+                    time.sleep(backoff)
+                    backoff *= 2
+                    continue
+                logger.error(f"Gemini API error on attempt {attempt + 1}: {exc}")
+                if attempt == max_retries - 1:
+                    raise exc
 
 
 class OpenAIClient(BaseLLMClient):
@@ -339,17 +433,17 @@ def create_llm_client(
     Factory function to initialize the preferred free LLM provider.
     Priority order:
     1. Explicit provider passed as argument
-    2. DEFAULT_LLM_PROVIDER in environment
-    3. Auto-detection based on configured API keys: GROQ_API_KEY > GEMINI_API_KEY > OPENROUTER_API_KEY > OPENAI_API_KEY
+    2. DEFAULT_LLM_PROVIDER in environment (defaults to 'gemini')
+    3. Auto-detection based on configured API keys: GEMINI_API_KEY > GROQ_API_KEY > OPENROUTER_API_KEY > OPENAI_API_KEY
     4. Offline mock client if no keys are found
     """
     chosen_provider = (provider or os.environ.get("DEFAULT_LLM_PROVIDER", "")).strip().lower()
 
     if not chosen_provider:
-        if os.environ.get("GROQ_API_KEY"):
-            chosen_provider = "groq"
-        elif os.environ.get("GEMINI_API_KEY"):
+        if os.environ.get("GEMINI_API_KEY"):
             chosen_provider = "gemini"
+        elif os.environ.get("GROQ_API_KEY"):
+            chosen_provider = "groq"
         elif os.environ.get("OPENROUTER_API_KEY"):
             chosen_provider = "openrouter"
         elif os.environ.get("OPENAI_API_KEY"):
@@ -357,10 +451,10 @@ def create_llm_client(
         else:
             chosen_provider = "offline"
 
-    if chosen_provider == "groq":
-        return GroqClient(api_key=api_key, model=model)
-    elif chosen_provider == "gemini":
+    if chosen_provider == "gemini":
         return GeminiFreeClient(api_key=api_key, model=model)
+    elif chosen_provider == "groq":
+        return GroqClient(api_key=api_key, model=model)
     elif chosen_provider in ["openrouter", "openai"]:
         if chosen_provider == "openrouter":
             base_url = "https://openrouter.ai/api/v1"
@@ -371,4 +465,4 @@ def create_llm_client(
     elif chosen_provider in ["offline", "mock"]:
         return OfflineMockClient()
     else:
-        raise ValueError(f"Unknown LLM provider: '{chosen_provider}'. Supported: groq, gemini, openrouter, openai, offline")
+        raise ValueError(f"Unknown LLM provider: '{chosen_provider}'. Supported: gemini, groq, openrouter, openai, offline")

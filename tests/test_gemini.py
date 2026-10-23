@@ -32,7 +32,7 @@ def test_create_llm_client_prioritizes_gemini(monkeypatch):
     client = create_llm_client()
     assert isinstance(client, GeminiFreeClient)
     assert client.api_key == "AIzaSyFakeKey123"
-    assert client.model == "gemini-1.5-flash"
+    assert client.model == "gemini-3.5-flash-lite"
 
 
 def test_gemini_client_parses_function_call(monkeypatch):
